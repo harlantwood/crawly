@@ -47,9 +47,12 @@ defmodule Crawly.Worker do
           {:error, _step, reason, _step_state} ->
             Logger.error(
               fn ->
-                "Crawly worker could not process the request to #{inspect(request.url)}
+                "Crawly worker could not process the request to #{
+                  inspect(request.url)
+                }
                   reason: #{inspect(reason)}"
-              end)
+              end
+            )
             @default_backoff
           {:ok, _result} ->
             @default_backoff
@@ -145,19 +148,34 @@ defmodule Crawly.Worker do
   end
 
   ## Retry a request if max retries allows to do so
-  defp maybe_retry_request(spider, %Crawly.Request{retries: retries} = request) do
-    max_retires = Application.get_env(:crawly, :max_retries, 3)
+  defp maybe_retry_request(spider, request) do
+    retries = Crawly.Request.retries(request)
+    url = Crawly.Request.url(request)
 
-    case retries <= max_retires do
+    retry_settings = Application.get_env(:crawly, :retry, [])
+
+    max_retries = Keyword.get(retry_settings, :max_retries, 3)
+    ignored_middlewares = Keyword.get(
+      retry_settings,
+      :ignored_middlewares,
+      [Crawly.Middlewares.UniqueRequest]
+    )
+
+    case retries <= max_retries do
       true ->
-        Logger.info("Request to #{request.url}, is scheduled for retry")
-        :ok = Crawly.RequestsStorage.store(
-          spider,
-          %Crawly.Request{request | retries: retries + 1}
-        )
+        Logger.info("Request to #{url}, is scheduled for retry")
+
+        middlewares = Crawly.Request.middlewares(request) -- ignored_middlewares
+
+        request = request
+                  |> Crawly.Request.middlewares(middlewares)
+                  |> Crawly.Request.retries(retries + 1)
+
+        :ok = Crawly.RequestsStorage.store(spider, request)
       false ->
-        Logger.info("Dropping request to #{request.url}, (max retries)")
+        Logger.info("Dropping request to #{url}, (max retries)")
         :ok
     end
+
   end
 end
